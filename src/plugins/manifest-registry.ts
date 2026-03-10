@@ -200,6 +200,14 @@ export function loadPluginManifestRegistry(params: {
         : manifestRes.manifestPath;
     })();
 
+    const record = buildRecord({
+      manifest,
+      candidate,
+      manifestPath: manifestRes.manifestPath,
+      schemaCacheKey,
+      configSchema,
+    });
+
     const existing = seenIds.get(manifest.id);
     if (existing) {
       // Check whether both candidates point to the same physical directory
@@ -214,20 +222,22 @@ export function loadPluginManifestRegistry(params: {
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
+      const candidateRank = PLUGIN_ORIGIN_RANK[candidate.origin];
+      const existingRank = PLUGIN_ORIGIN_RANK[existing.candidate.origin];
+
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
-        if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = buildRecord({
-            manifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          });
+        if (candidateRank < existingRank) {
+          records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         }
         continue;
+      }
+
+      if (candidateRank < existingRank) {
+        records[existing.recordIndex] = record;
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
       }
       diagnostics.push({
         level: "warn",
@@ -235,19 +245,11 @@ export function loadPluginManifestRegistry(params: {
         source: candidate.source,
         message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
       });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      continue;
     }
 
-    records.push(
-      buildRecord({
-        manifest,
-        candidate,
-        manifestPath: manifestRes.manifestPath,
-        schemaCacheKey,
-        configSchema,
-      }),
-    );
+    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+    records.push(record);
   }
 
   const registry = { plugins: records, diagnostics };
